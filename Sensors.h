@@ -13,6 +13,13 @@ extern unsigned long softClockBase;
 extern unsigned long softClockSetAt;
 void setSoftClock(unsigned long unixLKT);
 
+// Web-injected location — written by WebManager (/push-location endpoint),
+// read by getSensorReadings() and sendLocationSMS() when GPS has no fix.
+extern double webInjectedLat;
+extern double webInjectedLon;
+extern float  webInjectedSpeed;
+extern bool   webLocationInjected;
+
 struct SensorData {
   // IMU (Accelerometer & Gyroscope)
   float ax, ay, az;
@@ -33,7 +40,13 @@ struct SensorData {
 // SD Status
   bool sdStatus;
   float sdUsedMB;
-  float sdTotalMB; // <--- Change this from GB to MB
+  float sdTotalMB;
+
+  // Web-injected location (from webapp via /push-location when GPS has no fix)
+  double webLat;
+  double webLon;
+  float  webSpeed;
+  bool   webLocationValid;
 };
 
 void initSensors();

@@ -12,6 +12,7 @@ struct DeviceSettings {
   String firebaseAPIKey;
   String userID;
   String googleMapsAPIKey;
+  String simAPN;        // Mobile operator APN  e.g. "dialogbb" / "mobitelbb" / "internet"
 };
 
 class SettingsManager {

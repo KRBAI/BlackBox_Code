@@ -13,6 +13,7 @@ void SettingsManager::begin() {
   _settings.firebaseAPIKey   = _prefs.getString("firebaseAPIKey", FIREBASE_API_KEY);
   _settings.userID           = _prefs.getString("userID",         USER_ID);
   _settings.googleMapsAPIKey = _prefs.getString("googleMapsKey",  "");
+  _settings.simAPN           = _prefs.getString("simAPN",         "");
   _prefs.end();
 
   Serial.println("[Settings] Loaded from NVS.");
@@ -30,6 +31,7 @@ void SettingsManager::save(DeviceSettings& s) {
   _prefs.putString("firebaseAPIKey", s.firebaseAPIKey);
   _prefs.putString("userID",         s.userID);
   _prefs.putString("googleMapsKey",  s.googleMapsAPIKey);
+  _prefs.putString("simAPN",         s.simAPN);
   _prefs.end();
   _settings = s;
   Serial.println("[Settings] Saved to NVS.");

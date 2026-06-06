@@ -13,10 +13,18 @@
 #include <FirebaseClient.h>   
 #include "Config.h"
 #include "Sensors.h"
+#include "SimManager.h"    // gprsConnected(), httpPostGPRS()
 
 extern float internalUsedMB;
 extern float internalTotalMB;
 extern bool internalMounted;
+
+// Web-injected location — written by /push-location POST from the webapp.
+// Exposed here so Sensors.cpp can read them via the extern in Sensors.h.
+extern double webInjectedLat;
+extern double webInjectedLon;
+extern float  webInjectedSpeed;
+extern bool   webLocationInjected;
 
 extern String dataBuffer;
 extern int bufferCount;
@@ -29,5 +37,6 @@ void forceSaveData();
 void initWebServer();
 void handleWebServer();
 void uploadToFirebase(SensorData d); 
+void pollTelemetryLocation();   // runs on Core 0 via telemetryPollTask — do NOT call from loop()
 
 #endif

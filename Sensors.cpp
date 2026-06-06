@@ -72,10 +72,12 @@ SensorData getSensorReadings() {
   d.sats = gps.satellites.value();
   d.gpsValid = gps.location.isValid();
 
-  // 2. Read Time & Date from software clock (set by SIM on boot, ticks via millis)
+  // 2. Read Time & Date from software clock.
+  // softClockBase is UTC. Add LKT offset (UTC+5:30 = 19800s) for local display.
   {
+    static constexpr unsigned long LKT_OFFSET_SEC = 19800UL;
     unsigned long elapsed = (millis() - softClockSetAt) / 1000UL;
-    unsigned long t = softClockBase + elapsed;
+    unsigned long t = softClockBase + elapsed + LKT_OFFSET_SEC;
 
     uint8_t ss = t % 60;
     uint8_t mn = (t / 60) % 60;
@@ -128,6 +130,12 @@ SensorData getSensorReadings() {
     d.sdUsedMB = 0;
     d.sdTotalMB = 0;
   }
+
+  // 5. WEB-INJECTED LOCATION (from webapp /push-location endpoint)
+  d.webLat          = webInjectedLat;
+  d.webLon          = webInjectedLon;
+  d.webSpeed        = webInjectedSpeed;
+  d.webLocationValid = webLocationInjected;
 
   return d;
 }

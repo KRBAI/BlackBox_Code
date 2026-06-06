@@ -27,7 +27,33 @@
 // ==========================================
 // SYSTEM SETTINGS
 // ==========================================
-#define LOG_INTERVAL 1000      
+#define LOG_INTERVAL 1000
+
+// ==========================================
+// ROLLOVER DETECTION
+// ==========================================
+// Angle (degrees) beyond which a roll or pitch is considered a rollover.
+// 60° is conservative — adjust down to 45° for more sensitivity.
+#define ROLLOVER_ANGLE_DEG      60.0f
+
+// How long (ms) the angle must be sustained before triggering.
+// Filters out brief hard cornering or speed bumps.
+#define ROLLOVER_SUSTAIN_MS     1500
+
+// ==========================================
+// TEMPERATURE MONITORING
+// ==========================================
+// MPU6050 die temperature alert threshold (°C).
+// The die runs ~2-3°C above ambient; 70°C die = ~67°C ambient.
+// Raise to 80 if mounted close to the engine bay.
+#define TEMP_ALERT_THRESHOLD_C  70.0f
+
+// How long (ms) the temperature must stay above threshold before alerting.
+// Prevents a single noisy sample from triggering a false alarm.
+#define TEMP_ALERT_SUSTAIN_MS   5000
+
+// How long (ms) to wait before re-alerting if temp stays high.
+#define TEMP_ALERT_COOLDOWN_MS  60000
 
 // ==========================================
 // NETWORK & CLOUD SETTINGS
@@ -38,16 +64,22 @@
 #define WIFI_SSID "BlackBox_S3"
 #define WIFI_PASS "12345678"
 
-// --- 2. INTERNET CONNECTION (Your Phone's Hotspot) ---
-// The ESP32 will connect to this to get internet access for Firebase.
-#define ROUTER_SSID "Pixel7pro"
-#define ROUTER_PASS "krb@2903"
+// --- 2. INTERNET CONNECTION ---
+// These are compile-time fallback defaults only.
+// Actual credentials are stored in NVS flash via SettingsManager and
+// configured through the web UI at http://192.168.4.1/settings.
+// Never commit real passwords here — use the web UI instead.
+#define ROUTER_SSID ""
+#define ROUTER_PASS ""
 
 // --- 3. FIREBASE CREDENTIALS ---
-#define FIREBASE_URL "axel-7e7e5-default-rtdb.asia-southeast1.firebasedatabase.app/"
-#define FIREBASE_API_KEY "AIzaSyBvvH1ahhPmBqE2af32Ln0uIfOvzMfyQ4Y"
+// Leave blank — configure via the web settings page.
+// Stored securely in NVS flash, never in source code.
+#define FIREBASE_URL ""
+#define FIREBASE_API_KEY ""
 
 // --- 4. DEVICE & USER IDENTITY ---
-#define USER_ID "E25zB1dcAmc9Mknc9d0QPjicgVm2"
+// Leave blank — configure via the web settings page.
+#define USER_ID ""
 
 #endif

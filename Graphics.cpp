@@ -105,67 +105,146 @@ void drawGyroPage(SensorData data) {
 // --- PAGE 3: FLIGHT NAV / SPEEDOMETER ---
 void drawGPSPage(SensorData data) {
   u8g2.clearBuffer();
-  
-  // Top Header Bar
+
+  // Resolve which location source to display
+  bool  useWeb  = (!data.gpsValid && data.webLocationValid);
+  double dispLat = data.gpsValid ? data.lat   : (useWeb ? data.webLat   : 0.0);
+  double dispLon = data.gpsValid ? data.lon   : (useWeb ? data.webLon   : 0.0);
+  float  dispSpd = data.gpsValid ? data.speed : (useWeb ? data.webSpeed : 0.0f);
+
+  // Top Header Bar — show source label
   u8g2.setDrawColor(1); u8g2.drawBox(0, 0, 128, 11);
   u8g2.setDrawColor(0); u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.setCursor(2, 8); u8g2.print("SATS:"); u8g2.print(data.sats);
-  u8g2.setCursor(84, 8); u8g2.print("GPS NAV");
+  if (data.gpsValid) {
+    u8g2.setCursor(2, 8); u8g2.print("SATS:"); u8g2.print(data.sats);
+    u8g2.drawStr(84, 8, "GPS NAV");
+  } else if (useWeb) {
+    u8g2.drawStr(2, 8, "NO GPS");
+    u8g2.drawStr(72, 8, "WEB LOC");
+  } else {
+    u8g2.drawStr(2, 8, "NO GPS");
+    u8g2.drawStr(68, 8, "NO FIX");
+  }
   u8g2.setDrawColor(1);
 
   // Center Divider Line
-  u8g2.drawLine(64, 12, 64, 64); 
+  u8g2.drawLine(64, 12, 64, 64);
 
   // LEFT SIDE: Coordinates
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.drawStr(2, 22, "LATITUDE");
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.setCursor(2, 34); 
-  u8g2.print(data.lat, 5); // 5 decimals fits the left screen half nicely
+  u8g2.setCursor(2, 34);
+  if (!data.gpsValid && !useWeb) u8g2.print("---.-----");
+  else u8g2.print(dispLat, 5);
 
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.drawStr(2, 48, "LONGITUDE");
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.setCursor(2, 60); 
-  u8g2.print(data.lon, 5);
+  u8g2.setCursor(2, 60);
+  if (!data.gpsValid && !useWeb) u8g2.print("---.-----");
+  else u8g2.print(dispLon, 5);
 
   // RIGHT SIDE: Speedometer
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.drawStr(74, 22, "SPEED km/h");
-  
-  u8g2.setFont(u8g2_font_logisoso24_tf); // Big bold font for speed
-  int currentSpeed = (int)data.speed;
-  if (currentSpeed < 0) currentSpeed = 0; // Prevent negative glitch
-  
-  // Center the speed number on the right side of the screen
+
+  u8g2.setFont(u8g2_font_logisoso24_tf);
+  int currentSpeed = (int)dispSpd;
+  if (currentSpeed < 0) currentSpeed = 0;
+
   String spdStr = String(currentSpeed);
   int w = u8g2.getStrWidth(spdStr.c_str());
-  u8g2.setCursor(64 + (32 - (w/2)), 55); 
+  u8g2.setCursor(64 + (32 - (w/2)), 55);
   u8g2.print(spdStr);
 
   u8g2.sendBuffer();
 }
 
-// --- PAGE 4: MEMORY ---
+// --- PAGE 4: SYSTEM HEALTH (storage + temperature) ---
 void drawSystemPage(SensorData data) {
   u8g2.clearBuffer();
+
+  // ── Header ──────────────────────────────────────────────────────
   u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(2, 8, "SYSTEM MEMORY"); u8g2.drawLine(0, 10, 128, 10);
+  u8g2.drawStr(2, 8, "SYSTEM HEALTH");
+  u8g2.drawLine(0, 10, 128, 10);
+
+  // ── Left column: Storage ────────────────────────────────────────
+  u8g2.setFont(u8g2_font_5x7_tf);
+  u8g2.drawStr(0, 21, "STORAGE");
 
   u8g2.setFont(u8g2_font_6x10_tf);
   if (!data.sdStatus) {
-    u8g2.drawStr(10, 35, "NO STORAGE!");
+    u8g2.drawStr(0, 33, "NO STORAGE");
   } else {
-    u8g2.setCursor(0, 30); u8g2.print("Used: "); u8g2.print(data.sdUsedMB, 2); u8g2.print(" MB");
-    u8g2.setCursor(0, 45); u8g2.print("Tot : "); u8g2.print(data.sdTotalMB, 2); u8g2.print(" MB");
+    u8g2.setCursor(0, 33);
+    u8g2.print(data.sdUsedMB, 1); u8g2.print("/");
+    u8g2.print(data.sdTotalMB, 1); u8g2.print("MB");
 
-    if(data.sdTotalMB > 0) {
-        int width = (data.sdUsedMB / data.sdTotalMB) * 128.0;
-        if(width < 2 && data.sdUsedMB > 0) width = 2; 
-        if(width > 128) width = 128;
-        u8g2.drawFrame(0, 52, 128, 10); u8g2.drawBox(0, 52, width, 10);
+    // Storage bar (left half of screen, y=38)
+    if (data.sdTotalMB > 0) {
+      int w = (int)((data.sdUsedMB / data.sdTotalMB) * 58.0f);
+      if (w < 2 && data.sdUsedMB > 0) w = 2;
+      if (w > 58) w = 58;
+      u8g2.drawFrame(0, 38, 58, 8);
+      u8g2.drawBox(0, 38, w, 8);
     }
   }
+
+  // ── Vertical divider ────────────────────────────────────────────
+  u8g2.drawLine(64, 11, 64, 63);
+
+  // ── Right column: Temperature ───────────────────────────────────
+  u8g2.setFont(u8g2_font_5x7_tf);
+  u8g2.drawStr(68, 21, "TEMP (die)");
+
+  // Large temperature value
+  u8g2.setFont(u8g2_font_9x15_tf);
+  char tbuf[8];
+  snprintf(tbuf, sizeof(tbuf), "%.1f", data.temp);
+  u8g2.setCursor(68, 35);
+  u8g2.print(tbuf);
+  u8g2.setFont(u8g2_font_5x7_tf);
+  u8g2.print(" C");
+
+  // Temperature bar (right half, y=38) — range 20°C to 90°C
+  {
+    const float tLow = 20.0f, tHigh = 90.0f;
+    float norm = (data.temp - tLow) / (tHigh - tLow);
+    if (norm < 0.0f) norm = 0.0f;
+    if (norm > 1.0f) norm = 1.0f;
+    int w = (int)(norm * 58.0f);
+    u8g2.drawFrame(66, 38, 60, 8);
+    u8g2.drawBox(66, 38, w, 8);
+
+    // Threshold tick mark inside the bar
+    int tickX = 66 + (int)(((TEMP_ALERT_THRESHOLD_C - tLow) / (tHigh - tLow)) * 60.0f);
+    if (tickX > 66 && tickX < 126) {
+      u8g2.drawLine(tickX, 36, tickX, 47); // tick straddles the bar
+    }
+  }
+
+  // ── Warning label if over threshold ─────────────────────────────
+  u8g2.setFont(u8g2_font_5x7_tf);
+  if (data.temp >= TEMP_ALERT_THRESHOLD_C) {
+    // Blinking "HOT!" label
+    if ((millis() / 400) % 2 == 0) {
+      u8g2.drawStr(74, 55, ">>> HOT! <<<");
+    }
+  } else {
+    u8g2.drawStr(74, 55, "NORMAL");
+  }
+
+  // ── Bottom: free space percentage ───────────────────────────────
+  if (data.sdStatus && data.sdTotalMB > 0) {
+    u8g2.setFont(u8g2_font_5x7_tf);
+    int pct = (int)((data.sdUsedMB / data.sdTotalMB) * 100.0f);
+    char pbuf[10];
+    snprintf(pbuf, sizeof(pbuf), "%d%% used", pct);
+    u8g2.drawStr(0, 55, pbuf);
+  }
+
   u8g2.sendBuffer();
 }
 
@@ -328,9 +407,6 @@ void drawCallingPage() {
   u8g2.sendBuffer();
 }
 // =====================================================
-// PAGE 5: SIM STATUS — signal strength + network info
-// =====================================================
-// =====================================================
 // CONNECTING ANIMATION — shown while SIM init blocks
 // Called from a FreeRTOS task in setup()
 // =====================================================
@@ -370,13 +446,9 @@ void drawConnectingAnimation() {
 }
 
 // =====================================================
-// PAGE 5: SIM STATUS — signal + operator
-// Time is written to RTC and shown on the clock page.
-// =====================================================
-// =====================================================
 // PAGE 5: SIM STATUS — signal strength + operator
 // =====================================================
-void drawSimPage(SimStatus& sim) {
+void drawSimPage(SimStatus sim) {
   u8g2.clearBuffer();
 
   // ── Top bar (inverted) ──────────────────────────────
@@ -433,6 +505,111 @@ void drawSimPage(SimStatus& sim) {
     u8g2.setCursor(128 - bw - 2, 63);
     u8g2.print(badge);
   }
+
+  u8g2.sendBuffer();
+}
+// =====================================================
+// ROLLOVER ALERT SCREEN
+// Shows roll and pitch angles with a visual attitude
+// indicator (a tilted rectangle representing the car).
+// =====================================================
+void drawRolloverPage(float roll, float pitch) {
+  u8g2.clearBuffer();
+
+  // ── Inverted alarm header ──
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, 0, 128, 14);
+  u8g2.setDrawColor(0);
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(8, 11, "!!! ROLLOVER !!!");
+  u8g2.setDrawColor(1);
+
+  // ── Attitude indicator — tilted rectangle centred at (96, 39) ──
+  // The rectangle represents the vehicle cross-section.
+  // We rotate its four corners by the roll angle so it visually tips over.
+  const float cx = 96.0f, cy = 39.0f;
+  const float hw = 14.0f, hh = 8.0f;   // half-width, half-height
+  float rad = roll * (M_PI / 180.0f);
+  float cosR = cosf(rad), sinR = sinf(rad);
+
+  // Four corners before rotation: (±hw, ±hh)
+  float cornersX[4] = { -hw,  hw,  hw, -hw };
+  float cornersY[4] = { -hh, -hh,  hh,  hh };
+  int px[4], py[4];
+  for (int i = 0; i < 4; i++) {
+    px[i] = (int)(cx + cornersX[i] * cosR - cornersY[i] * sinR);
+    py[i] = (int)(cy + cornersX[i] * sinR + cornersY[i] * cosR);
+  }
+  // Draw the rotated rectangle as four lines
+  for (int i = 0; i < 4; i++) {
+    u8g2.drawLine(px[i], py[i], px[(i+1)%4], py[(i+1)%4]);
+  }
+  // Horizon reference line (always horizontal)
+  u8g2.drawLine(74, 39, 118, 39);
+
+  // ── Numeric angle readout (left side) ──
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(2, 26, "ROLL:");
+  u8g2.setCursor(2, 38);
+  u8g2.print(roll, 1); u8g2.print((char)0xB0); // degree symbol
+
+  u8g2.drawStr(2, 52, "PITCH:");
+  u8g2.setCursor(2, 64);
+  u8g2.print(pitch, 1); u8g2.print((char)0xB0);
+
+  u8g2.sendBuffer();
+}
+
+// =====================================================
+// TEMPERATURE ALERT SCREEN
+// Shows current temp with a bar graph and blinks when
+// the threshold is exceeded.
+// =====================================================
+void drawTempAlertPage(float tempC) {
+  u8g2.clearBuffer();
+
+  // ── Flashing header — inverts every 400 ms ──
+  bool blink = ((millis() / 400) % 2 == 0);
+  if (blink) {
+    u8g2.setDrawColor(1); u8g2.drawBox(0, 0, 128, 14);
+    u8g2.setDrawColor(0);
+  } else {
+    u8g2.setDrawColor(1);
+  }
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(10, 11, "HIGH TEMPERATURE!");
+  u8g2.setDrawColor(1);
+
+  // ── Large temperature value ──
+  u8g2.setFont(u8g2_font_logisoso24_tf);
+  char tbuf[10];
+  snprintf(tbuf, sizeof(tbuf), "%.1f", tempC);
+  int tw = u8g2.getStrWidth(tbuf);
+  u8g2.setCursor((128 - tw) / 2, 46);
+  u8g2.print(tbuf);
+
+  // Degree-C suffix in smaller font, positioned right of the number
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setCursor((128 + tw) / 2 + 2, 38);
+  u8g2.print("o");   // superscript-style degree
+  u8g2.setCursor((128 + tw) / 2 + 2, 48);
+  u8g2.print("C");
+
+  // ── Threshold bar ──
+  // Map tempC into a bar: empty = TEMP_ALERT_THRESHOLD_C - 20,
+  //                        full  = TEMP_ALERT_THRESHOLD_C + 20
+  float low  = TEMP_ALERT_THRESHOLD_C - 20.0f;
+  float high = TEMP_ALERT_THRESHOLD_C + 20.0f;
+  float norm = (tempC - low) / (high - low);
+  if (norm < 0.0f) norm = 0.0f;
+  if (norm > 1.0f) norm = 1.0f;
+  int barW = (int)(norm * 124.0f);
+  u8g2.drawFrame(2, 52, 124, 10);
+  if (barW > 0) u8g2.drawBox(2, 52, barW, 10);
+
+  // Threshold tick mark
+  int tickX = (int)(((TEMP_ALERT_THRESHOLD_C - low) / (high - low)) * 124.0f) + 2;
+  u8g2.drawLine(tickX, 50, tickX, 63);
 
   u8g2.sendBuffer();
 }

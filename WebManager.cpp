@@ -9,6 +9,15 @@ bool  internalMounted = false;
 static unsigned long lastStorageUpdate = 0;
 static unsigned long lastLogTime       = 0;
 
+// Web-injected location — populated from two sources (whichever is fresher):
+//   1. Direct POST to /push-location (BlackBox hotspot mode, instant)
+//   2. Firebase GET from telemetry/gps (internet mode, polled every 5s)
+// Used as fallback when GPS has no fix.
+double webInjectedLat      = 0.0;
+double webInjectedLon      = 0.0;
+float  webInjectedSpeed    = 0.0;
+bool   webLocationInjected = false;
+
 // --- WEB SERVER & FIREBASE ---
 WebServer server(80);
 WiFiClientSecure ssl_client;
@@ -19,6 +28,7 @@ RealtimeDatabase Database;
 NoAuth no_auth;
 
 static unsigned long lastFirebaseUpload = 0;
+static unsigned long lastLiveUpload     = 0;   // 1-second live data upload
 static bool firebaseInitialized = false;
 
 // --- 60-SECOND AGGREGATION ---
@@ -106,7 +116,9 @@ static String buildSettingsPage() {
   <div><h1>BLACKBOX</h1><small>DEVICE CONFIGURATION</small></div>
   <div style="margin-left:auto;font-size:0.75rem;color:#7d8590">
     Internet:&nbsp;<span class="badge )rawhtml";
-  html += (WiFi.status() == WL_CONNECTED) ? "on\">ONLINE&gt;&gt;" : "off\">OFFLINE";
+  html += (WiFi.status() == WL_CONNECTED) ? "on\">WiFi" 
+        : gprsConnected()                ? "on\">GPRS"
+        :                                  "off\">OFFLINE";
   html += R"rawhtml("></span>
   </div>
 </header>
@@ -114,7 +126,7 @@ static String buildSettingsPage() {
   <form method="POST" action="/save-settings">
     <!-- ── NETWORK ── -->
     <div class="card">
-      <h2>&#128246; Network &mdash; Router</h2>
+      <h2>&#128246; Network &mdash; Router (WiFi)</h2>
       <div class="field"><label>ROUTER SSID</label>
         <input type="text" name="routerSSID" value=")rawhtml"; html += s.routerSSID;
   html += R"rawhtml(" placeholder="WiFi name">
@@ -124,6 +136,17 @@ static String buildSettingsPage() {
   html += R"rawhtml(">
         <button type="button" class="eye" onclick="tog('rp')">&#128065;</button>
       </div></div>
+    </div>
+
+    <!-- ── SIM / GPRS ── -->
+    <div class="card">
+      <h2>&#128225; Network &mdash; SIM / GPRS (cellular data)</h2>
+      <p class="warn">Enter your SIM card operator's APN. The device will use cellular data to upload to Firebase when WiFi is unavailable. Leave blank to disable GPRS uploads.<br><br>
+      Common APNs (Sri Lanka): Dialog = <code>dialogbb</code> &nbsp;|&nbsp; Mobitel = <code>mobitelbb</code> &nbsp;|&nbsp; Hutch = <code>hutch3g</code> &nbsp;|&nbsp; Airtel = <code>airtelgprs.com</code></p>
+      <div class="field"><label>SIM APN</label>
+        <input type="text" name="simAPN" value=")rawhtml"; html += s.simAPN;
+  html += R"rawhtml(" placeholder="e.g. dialogbb">
+      </div>
     </div>
 
     <!-- ── EMERGENCY CONTACT ── -->
@@ -154,18 +177,7 @@ static String buildSettingsPage() {
       </div>
     </div>
 
-    <!-- ── GOOGLE MAPS ── -->
-    <div class="card">
-      <h2>&#128205; Google Maps API Key</h2>
-      <div class="field"><label>API KEY (enables WiFi geolocation when GPS has no fix)</label>
-        <div class="iw">
-          <input type="password" name="googleMapsAPIKey" id="gmk" value=")rawhtml"; html += s.googleMapsAPIKey;
-  html += R"rawhtml(" placeholder="AIzaSy...">
-          <button type="button" class="eye" onclick="tog('gmk')">&#128065;</button>
-        </div>
-      </div>
-    </div>
-
+    <!-- ── GOOGLE MAPS — REMOVED (location now pushed by webapp) ── -->
       <p class="hint">&#9432; The device RTC will be synced to this time when you click Save &amp; Reboot.</p>
     </div>
 
@@ -228,6 +240,7 @@ void initWebServer() {
     html += "<p>WiFi: " + String(WiFi.status() == WL_CONNECTED
               ? "Connected (" + WiFi.localIP().toString() + ")"
               : "Offline") + "</p>";
+    html += "<p>GPRS: " + String(gprsConnected() ? "Connected (cellular data active)" : "Offline") + "</p>";
     html += "<br><a href='/settings' style='color:#388bfd;font-size:1.1rem'>&#9881; Open Settings</a>";
     html += "</body></html>";
     server.send(200, "text/html", html);
@@ -247,7 +260,7 @@ void initWebServer() {
     n.firebaseURL      = server.arg("firebaseURL");
     n.firebaseAPIKey   = server.arg("firebaseAPIKey");
     n.userID           = server.arg("userID");
-    n.googleMapsAPIKey = server.arg("googleMapsAPIKey");
+    n.simAPN           = server.arg("simAPN");
     settingsManager.save(n);
 
 
@@ -280,6 +293,39 @@ void initWebServer() {
     else server.send(200, "text/plain", "ERROR: Firebase returned HTTP " + String(code));
   });
 
+  // --- Push location from webapp (used when GPS has no fix) ---
+  // Webapp POSTs: {"lat":6.93221,"lon":79.84178,"speed":42.5}
+  // CORS headers allow the webapp (any origin) to call this endpoint.
+  server.on("/push-location", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(204);
+  });
+  server.on("/push-location", HTTP_POST, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    String body = server.arg("plain");
+    // Simple JSON parse — find "lat", "lon", "speed"
+    auto extractField = [&](const String& key) -> float {
+      int idx = body.indexOf("\"" + key + "\":");
+      if (idx < 0) return 0.0f;
+      return body.substring(idx + key.length() + 3).toFloat();
+    };
+    float lat   = extractField("lat");
+    float lon   = extractField("lon");
+    float speed = extractField("speed");
+    if (lat != 0.0f || lon != 0.0f) {
+      webInjectedLat      = lat;
+      webInjectedLon      = lon;
+      webInjectedSpeed    = speed;
+      webLocationInjected = true;
+      Serial.printf("[WebLoc] Injected: %.5f, %.5f  speed=%.1f km/h\n", lat, lon, speed);
+      server.send(200, "application/json", "{\"ok\":true}");
+    } else {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid coords\"}");
+    }
+  });
+
   server.begin();
   Serial.println("[WebServer] Started. Connect to " + String(WIFI_SSID) + " -> http://192.168.4.1/settings");
 }
@@ -293,11 +339,15 @@ void logDataToInternal(SensorData d) {
   if (!internalMounted || millis() - lastLogTime < 1000) return;
   lastLogTime = millis();
 
+  // Use GPS if valid, fall back to web-injected location for storage
+  double logLat = d.gpsValid ? d.lat : (d.webLocationValid ? d.webLat : 0.0);
+  double logLon = d.gpsValid ? d.lon : (d.webLocationValid ? d.webLon : 0.0);
+
   if (secCount == 0) {
     startMinDate = d.dateStr; startMinTime = d.timeStr;
-    midLat = d.lat; midLon = d.lon;
+    midLat = logLat; midLon = logLon;
   }
-  if (secCount == 30) { midLat = d.lat; midLon = d.lon; }
+  if (secCount == 30) { midLat = logLat; midLon = logLon; }
 
   sumSpeed += d.speed;
   if (abs(d.ax) > maxAx) maxAx = abs(d.ax);
@@ -337,11 +387,138 @@ void forceSaveData() {
 
 // ==========================================
 // UPLOAD TO FIREBASE
+// Priority: WiFi (FirebaseClient library) → GPRS (raw HTTP over SIM800L)
 // ==========================================
+
+// Parse one CSV line and upload it via GPRS HTTP POST to Firebase REST API.
+// Firebase REST path: POST /users/<uid>/Trip_History.json?auth=<key>
+// Returns true on success.
+static bool uploadLineGPRS(const String& payload) {
+  DeviceSettings& s = settingsManager.get();
+  if (s.firebaseURL.length() < 5 || s.firebaseAPIKey.length() < 5) return false;
+
+  // Parse CSV: date,time,lat,lon,speed,ax,ay,az
+  int p1=payload.indexOf(','), p2=payload.indexOf(',',p1+1),
+      p3=payload.indexOf(',',p2+1), p4=payload.indexOf(',',p3+1),
+      p5=payload.indexOf(',',p4+1), p6=payload.indexOf(',',p5+1),
+      p7=payload.indexOf(',',p6+1);
+  if (p7 < 0) return false;
+
+  String dDate = payload.substring(0, p1);
+  String dTime = payload.substring(p1+1, p2);
+  String dLat  = payload.substring(p2+1, p3);
+  String dLon  = payload.substring(p3+1, p4);
+  String dSpd  = payload.substring(p4+1, p5);
+  String dAx   = payload.substring(p5+1, p6);
+  String dAy   = payload.substring(p6+1, p7);
+  String dAz   = payload.substring(p7+1);
+
+  // Build JSON body
+  String body = "{";
+  body += "\"date\":\"" + dDate + "\",";
+  body += "\"time\":\"" + dTime + "\",";
+  body += "\"latitude\":"  + dLat + ",";
+  body += "\"longitude\":" + dLon + ",";
+  body += "\"avg_speed_kmh\":" + dSpd + ",";
+  body += "\"max_gForce_X\":" + dAx + ",";
+  body += "\"max_gForce_Y\":" + dAy + ",";
+  body += "\"max_gForce_Z\":" + dAz;
+  body += "}";
+
+  // Construct host and path
+  // firebaseURL is stored as "project-default-rtdb.region.firebasedatabase.app/"
+  String host = s.firebaseURL;
+  if (host.endsWith("/")) host = host.substring(0, host.length() - 1);
+  String path = "/users/" + s.userID + "/Trip_History.json?auth=" + s.firebaseAPIKey;
+
+  int code = httpPostGPRS(host, path, body);
+  return (code == 200);
+}
+
+// ==========================================
+// POLL FIREBASE TELEMETRY FOR WEB LOCATION
+// ==========================================
+// Reads telemetry/gps written by the webapp when the device GPS has no fix.
+// Path: telemetry/gps  (fields: latitude, longitude, speed_kmh, accuracy_meters)
+// Called from telemetryPollTask() on Core 0 — NEVER from the main loop —
+// because http.GET() with TLS can block for 200-800ms and would freeze the OLED.
+void pollTelemetryLocation() {
+  DeviceSettings& s = settingsManager.get();
+  if (s.firebaseURL.length() < 5 || s.firebaseAPIKey.length() < 5) return;
+
+  // Build REST URL:  GET https://<host>/telemetry/gps.json?auth=<key>
+  String host = s.firebaseURL;
+  // Normalise: strip trailing slash, strip leading "https://" if present
+  if (host.startsWith("https://")) host = host.substring(8);
+  if (host.startsWith("http://"))  host = host.substring(7);
+  if (host.endsWith("/"))          host = host.substring(0, host.length() - 1);
+
+  String url = "https://" + host + "/telemetry/gps.json?auth=" + s.firebaseAPIKey;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, url);
+  http.setTimeout(3000);
+  int code = http.GET();
+
+  if (code != 200) {
+    Serial.printf("[TelePoll] HTTP %d — skipping.\n", code);
+    http.end();
+    return;
+  }
+
+  String body = http.getString();
+  http.end();
+
+  // Response is a flat JSON object:
+  // {"accuracy_meters":4,"latitude":6.9345783,"longitude":79.8420274,"speed_kmh":0,"timestamp":"..."}
+  // Simple string extraction — no heap-heavy JSON library needed.
+  auto extractDouble = [&](const String& key) -> double {
+    String search = "\"" + key + "\":";
+    int idx = body.indexOf(search);
+    if (idx < 0) return 0.0;
+    int start = idx + search.length();
+    // find end of number (comma, }, or whitespace)
+    int end = start;
+    while (end < (int)body.length()) {
+      char c = body[end];
+      if (c == ',' || c == '}' || c == ' ' || c == '\n') break;
+      end++;
+    }
+    return body.substring(start, end).toDouble();
+  };
+
+  double lat   = extractDouble("latitude");
+  double lon   = extractDouble("longitude");
+  float  speed = (float)extractDouble("speed_kmh");
+
+  if (lat == 0.0 && lon == 0.0) {
+    Serial.println("[TelePoll] Telemetry has no valid location yet.");
+    return;
+  }
+
+  webInjectedLat      = lat;
+  webInjectedLon      = lon;
+  webInjectedSpeed    = speed;
+  webLocationInjected = true;
+  Serial.printf("[TelePoll] Got telemetry loc: %.6f, %.6f  spd=%.1f km/h\n", lat, lon, speed);
+}
+
 void uploadToFirebase(SensorData d) {
-  if (WiFi.status() == WL_CONNECTED) {
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  bool gprsOk = gprsConnected();
+
+  // Resolve which lat/lon to use for this frame
+  double useLat   = d.gpsValid ? d.lat   : (d.webLocationValid ? d.webLat   : 0.0);
+  double useLon   = d.gpsValid ? d.lon   : (d.webLocationValid ? d.webLon   : 0.0);
+  float  useSpeed = d.gpsValid ? d.speed : (d.webLocationValid ? d.webSpeed : 0.0f);
+  String locSrc   = d.gpsValid ? "GPS"   : (d.webLocationValid ? "WEB"      : "NONE");
+
+  // ── Path A: WiFi available → use FirebaseClient library ──────────────────
+  if (wifiOk) {
     if (!firebaseInitialized) {
-      Serial.println("[Firebase] Initializing...");
+      Serial.println("[Firebase/WiFi] Initializing...");
       ssl_client.setInsecure();
       initializeApp(aClient, app, getAuth(no_auth));
       app.getApp<RealtimeDatabase>(Database);
@@ -351,9 +528,35 @@ void uploadToFirebase(SensorData d) {
 
     app.loop();
 
-    if (app.ready() && FFat.exists("/offline_queue.txt") && millis() - lastFirebaseUpload > 3000) {
+    if (!app.ready()) return;   // not ready yet — skip this cycle
+
+    // ── 1-second live push to /users/<uid>/Live ──────────────────────────
+    if (millis() - lastLiveUpload >= 1000) {
+      lastLiveUpload = millis();
+
+      JsonWriter writer;
+      object_t liveJson, fLat, fLon, fSpd, fAx, fAy, fAz, fTmp, fSrc, fDate, fTime;
+      writer.create(fDate, "date",          d.dateStr);
+      writer.create(fTime, "time",          d.timeStr);
+      writer.create(fLat,  "latitude",      number_t(useLat,   5));
+      writer.create(fLon,  "longitude",     number_t(useLon,   5));
+      writer.create(fSpd,  "speed_kmh",     number_t(useSpeed, 1));
+      writer.create(fAx,   "ax",            number_t(d.ax,     3));
+      writer.create(fAy,   "ay",            number_t(d.ay,     3));
+      writer.create(fAz,   "az",            number_t(d.az,     3));
+      writer.create(fTmp,  "temp_c",        number_t(d.temp,   1));
+      writer.create(fSrc,  "location_src",  locSrc);
+      writer.join(liveJson, 10, fDate, fTime, fLat, fLon, fSpd, fAx, fAy, fAz, fTmp, fSrc);
+
+      String livePath = "/users/" + settingsManager.get().userID + "/Live";
+      Database.set<object_t>(aClient, livePath, liveJson, asyncCallback);
+      app.loop();
+    }
+
+    // ── Trip History queue drain (every 3s) ──────────────────────────────
+    if (FFat.exists("/offline_queue.txt") && millis() - lastFirebaseUpload > 3000) {
       lastFirebaseUpload = millis();
-      Serial.println("[Firebase] Uploading queue...");
+      Serial.println("[Firebase/WiFi] Uploading queue...");
       FFat.rename("/offline_queue.txt", "/uploading.txt");
       File file = FFat.open("/uploading.txt", FILE_READ);
       if (file) {
@@ -391,10 +594,43 @@ void uploadToFirebase(SensorData d) {
         }
         file.close();
         FFat.remove("/uploading.txt");
-        Serial.println("[Firebase] Upload complete.");
+        Serial.println("[Firebase/WiFi] Upload complete.");
       }
     }
-  } else {
-    firebaseInitialized = false;
+    return;   // WiFi handled it — don't fall through to GPRS
   }
+
+  // WiFi not available — reset FirebaseClient so it re-inits next time WiFi returns
+  firebaseInitialized = false;
+
+  // ── Path B: GPRS available → upload queue line-by-line via HTTP POST ────
+  if (!gprsOk) return;
+
+  if (!FFat.exists("/offline_queue.txt")) return;
+  if (millis() - lastFirebaseUpload < 15000) return;  // rate-limit: every 15s over GPRS
+  lastFirebaseUpload = millis();
+
+  Serial.println("[Firebase/GPRS] Uploading queue...");
+  FFat.rename("/offline_queue.txt", "/uploading.txt");
+  File file = FFat.open("/uploading.txt", FILE_READ);
+  if (!file) return;
+
+  int uploaded = 0, failed = 0;
+  while (file.available()) {
+    String payload = file.readStringUntil('\n');
+    payload.trim();
+    if (payload.length() <= 10) continue;
+
+    if (uploadLineGPRS(payload)) {
+      uploaded++;
+    } else {
+      File retry = FFat.open("/offline_queue.txt", FILE_APPEND);
+      if (retry) { retry.println(payload); retry.close(); }
+      failed++;
+    }
+    delay(200);
+  }
+  file.close();
+  FFat.remove("/uploading.txt");
+  Serial.printf("[Firebase/GPRS] Done. %d uploaded, %d re-queued.\n", uploaded, failed);
 }

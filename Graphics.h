@@ -27,12 +27,14 @@ void drawAccelPage(SensorData data);
 void drawGyroPage(SensorData data);
 void drawGPSPage(SensorData data);
 void drawSystemPage(SensorData data);
-void drawSimPage(SimStatus& sim);
+void drawSimPage(SimStatus sim);
 
 // Emergency screens
 void drawCrashPage(float gForce);
 void drawCountdownPage(int secondsLeft);
 void drawDriveSafePage();
 void drawCallingPage();
+void drawRolloverPage(float roll, float pitch);   // Sustained rollover alert
+void drawTempAlertPage(float tempC);              // Over-temperature alert
 
 #endif

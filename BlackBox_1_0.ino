@@ -12,12 +12,14 @@ AccidentDetector accidentDetector;
 SoundManager soundManager;        
 
 // --- TIMERS ---
-unsigned long bootTime = 0;
-unsigned long crashStartTime = 0;   
-unsigned long stateChangeTime = 0;  
-unsigned long lastSOSPress = 0;     
-unsigned long lastMovementTime = 0;
-unsigned long lastSimUpdate    = 0;           
+unsigned long bootTime          = 0;
+unsigned long crashStartTime    = 0;   
+unsigned long stateChangeTime   = 0;  
+unsigned long lastSOSPress      = 0;     
+unsigned long lastMovementTime  = 0;
+unsigned long lastSimUpdate     = 0;           
+unsigned long rolloverStartTime = 0;   // when rollover mode was entered
+unsigned long tempAlertTime     = 0;   // when temp alert mode was entered
 const unsigned long SLEEP_TIMEOUT = 300000;   // 5 Minutes
 
 // --- VARIABLES ---
@@ -31,6 +33,8 @@ enum SystemMode {
   MODE_COUNTDOWN, 
   MODE_DRIVE_SAFE, 
   MODE_CALLING,
+  MODE_ROLLOVER,      // Sustained rollover detected
+  MODE_TEMP_ALERT,    // Over-temperature condition
   MODE_SLEEP                                  
 };
 
@@ -70,6 +74,19 @@ void simStatusTask(void * parameter) {
   }
 }
 
+// Runs permanently on Core 0 — polls Firebase telemetry/gps every 5s.
+// pollTelemetryLocation() does a blocking TLS HTTP GET (200-800ms typical).
+// Keeping it off Core 1 prevents the OLED, sensors, and touch input from
+// freezing during that request.  Only polls when WiFi is connected.
+void telemetryPollTask(void * parameter) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(5000)); // poll every 5 seconds
+    if (WiFi.status() == WL_CONNECTED) {
+      pollTelemetryLocation();
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -98,12 +115,14 @@ void setup() {
   simInitDone = false;
   xTaskCreatePinnedToCore(simConnectTask, "SimAnim", 4096, NULL, 1, NULL, 0);
   initSimManager();   // blocks here until registered (or timeout)
+  initGPRS();         // bring up GPRS bearer now that the module is registered
   simInitDone = true; // signals animation task to stop
   delay(50);          // let the task delete itself cleanly
 
   // Start permanent SIM status polling task on Core 0
   // This keeps all blocking AT delays off the main loop
-  xTaskCreatePinnedToCore(simStatusTask, "SimStatus", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(simStatusTask,      "SimStatus",    4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(telemetryPollTask,  "TelePoll",     4096, NULL, 1, NULL, 0);
 
   initSensors();
   accidentDetector.init(); 
@@ -166,7 +185,7 @@ void loop() {
           currentMode = MODE_CALLING;
           soundManager.startSiren(); 
           forceSaveData(); 
-          sendLocationSMS(data.lat, data.lon); 
+          sendLocationSMS(data.lat, data.lon, SOS_MANUAL); 
       }
   }
 
@@ -178,6 +197,33 @@ void loop() {
         soundManager.startSiren(); 
         forceSaveData(); 
       }
+  }
+
+  // --- 6. ROLLOVER DETECTION ---
+  // Run in normal modes AND during countdown (a rollover mid-slide is still a rollover).
+  if (currentMode == MODE_FACE || currentMode == MODE_DASHBOARD ||
+      currentMode == MODE_CRASH_DETECTED || currentMode == MODE_COUNTDOWN) {
+    TiltEvent tilt = accidentDetector.updateTilt(data);
+    if (tilt.rolledOver) {
+      currentMode      = MODE_ROLLOVER;
+      rolloverStartTime = now;
+      soundManager.startSiren();
+      forceSaveData();
+      sendLocationSMS(data.lat, data.lon, SOS_ROLLOVER);
+    }
+  }
+
+  // --- 7. TEMPERATURE MONITORING ---
+  // Always check temperature regardless of mode (device can overheat while parked).
+  {
+    TempEvent temp = accidentDetector.updateTemperature(data);
+    if (temp.alertTriggered &&
+        currentMode != MODE_CALLING &&
+        currentMode != MODE_ROLLOVER) {
+      currentMode  = MODE_TEMP_ALERT;
+      tempAlertTime = now;
+      soundManager.startSiren();
+    }
   }
 
   // --- 6. DISPLAY STATE MACHINE ---
@@ -221,7 +267,7 @@ void loop() {
           if (remaining <= 0) {
              currentMode = MODE_CALLING;
              soundManager.startSiren();
-             sendLocationSMS(data.lat, data.lon); 
+             sendLocationSMS(data.lat, data.lon, SOS_IMPACT); 
           }
         }
         break;
@@ -241,6 +287,46 @@ void loop() {
            currentMode = MODE_DASHBOARD; 
            tapCount = 0;
            soundManager.stopSiren();
+        }
+        break;
+
+      // ── Rollover: show angle screen, auto-reset after 10s of normal attitude ──
+      case MODE_ROLLOVER:
+        {
+          TiltEvent tilt = accidentDetector.updateTilt(data);
+          drawRolloverPage(tilt.roll, tilt.pitch);
+          // Allow manual dismiss with a tap
+          if (tapCount > 0) {
+            tapCount = 0;
+            accidentDetector.resetRollover();
+            currentMode = MODE_DASHBOARD;
+            soundManager.stopSiren();
+          }
+          // Auto-clear if the vehicle has returned to normal attitude for 3s
+          if (!tilt.inRollover && (now - rolloverStartTime > 3000)) {
+            accidentDetector.resetRollover();
+            currentMode = MODE_DASHBOARD;
+            soundManager.stopSiren();
+          }
+        }
+        break;
+
+      // ── Temp alert: show temperature screen, dismiss with tap or auto-clear ──
+      case MODE_TEMP_ALERT:
+        {
+          TempEvent temp = accidentDetector.updateTemperature(data);
+          drawTempAlertPage(temp.tempC);
+          // Tap to acknowledge and return to dashboard
+          if (tapCount > 0) {
+            tapCount = 0;
+            currentMode = MODE_DASHBOARD;
+            soundManager.stopSiren();
+          }
+          // Auto-clear after 30s regardless (temp alert is informational, not critical)
+          if (now - tempAlertTime > 30000) {
+            currentMode = MODE_DASHBOARD;
+            soundManager.stopSiren();
+          }
         }
         break;
       
@@ -289,9 +375,11 @@ void handleInput() {
     } else if (tapCount >= 2) {
        if (currentMode == MODE_FACE) {
          currentMode = MODE_DASHBOARD;
-         currentPage = 0; 
+         currentPage = 0;
+         longPressTriggered = false; // clear happy-face state on mode switch
        } else if (currentMode == MODE_DASHBOARD) {
          currentMode = MODE_FACE;
+         longPressTriggered = false;
        }
     }
     if (currentMode == MODE_FACE || currentMode == MODE_DASHBOARD) {
