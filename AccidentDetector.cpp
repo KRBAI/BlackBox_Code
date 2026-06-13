@@ -14,7 +14,7 @@ void AccidentDetector::init() {
   tempOverActive = false;
 }
 
-bool AccidentDetector::update(SensorData data) {
+bool AccidentDetector::update(const SensorData& data) {
   float gX = data.ax / 9.81f;
   float gY = data.ay / 9.81f;
   float gZ = data.az / 9.81f;
@@ -50,7 +50,7 @@ bool AccidentDetector::update(SensorData data) {
 // contaminated by linear acceleration, so readings can be noisy.  That is
 // acceptable here because rollovers involve sustained attitude change, not
 // momentary spikes.
-TiltEvent AccidentDetector::updateTilt(SensorData data) {
+TiltEvent AccidentDetector::updateTilt(const SensorData& data) {
   TiltEvent ev;
 
   // Compute roll and pitch in degrees from the calibrated accelerometer
@@ -99,7 +99,7 @@ void AccidentDetector::resetRollover() {
 // It measures the die temperature, which runs roughly 2-4°C above ambient.
 // We apply a sustain window to ignore single noisy samples, and a cooldown
 // to avoid re-triggering every loop while the device stays hot.
-TempEvent AccidentDetector::updateTemperature(SensorData data) {
+TempEvent AccidentDetector::updateTemperature(const SensorData& data) {
   TempEvent ev;
   ev.tempC          = data.temp;
   ev.alertTriggered = false;
@@ -127,7 +127,7 @@ TempEvent AccidentDetector::updateTemperature(SensorData data) {
   return ev;
 }
 
-bool AccidentDetector::isMoving(SensorData data) {
+bool AccidentDetector::isMoving(const SensorData& data) {
   if (!prevValid) {
     prevAx = data.ax; prevAy = data.ay; prevAz = data.az;
     prevValid = true;

@@ -1,15 +1,13 @@
 #include "Sensors.h"
-#include "WebManager.h" // Required to access remoteUsedMB from the Camera Link
+#include "WebManager.h"
 
 Adafruit_MPU6050 mpu;
 TinyGPSPlus gps;
 HardwareSerial GPS_Serial(1);
 
 // ── Software clock ────────────────────────────────────────────────
-// Set once by syncTimeFromSIM(), ticks via millis().
-// No hardware RTC needed.
-unsigned long softClockBase  = 0; // Unix timestamp (LKT) at last sync
-unsigned long softClockSetAt = 0; // millis() value when base was set
+unsigned long softClockBase  = 0;
+unsigned long softClockSetAt = 0;
 
 void setSoftClock(unsigned long unixLKT) {
   softClockBase  = unixLKT;
@@ -17,14 +15,13 @@ void setSoftClock(unsigned long unixLKT) {
   Serial.printf("[Clock] Software clock set to Unix %lu\n", unixLKT);
 }
 
-
 // Calibration Offsets
 float off_ax = 0, off_ay = 0, off_az = 0;
 float off_gx = 0, off_gy = 0, off_gz = 0;
 
 void initSensors() {
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setTimeOut(1000); // Safety timeout
+  Wire.setTimeOut(1000);
 
   if (!mpu.begin()) {
     Serial.println("MPU Not Found!");
@@ -47,12 +44,13 @@ void calibrateSensors() {
     sensors_event_t a, g, t;
     mpu.getEvent(&a, &g, &t);
     sum_ax += a.acceleration.x; sum_ay += a.acceleration.y; sum_az += a.acceleration.z;
-    sum_gx += g.gyro.x; sum_gy += g.gyro.y; sum_gz += g.gyro.z;
+    sum_gx += g.gyro.x;         sum_gy += g.gyro.y;         sum_gz += g.gyro.z;
     delay(3);
   }
+
   off_ax = sum_ax / samples;
   off_ay = sum_ay / samples;
-  off_az = (sum_az / samples) - 9.81; // Keep gravity (1G)
+  off_az = (sum_az / samples) - 9.81;   // keep 1G reference for rollover trig
   off_gx = sum_gx / samples;
   off_gy = sum_gy / samples;
   off_gz = sum_gz / samples;
@@ -60,20 +58,17 @@ void calibrateSensors() {
 
 SensorData getSensorReadings() {
   SensorData d;
-  
-  // 1. Read GPS
-  while (GPS_Serial.available() > 0) {
-    gps.encode(GPS_Serial.read());
-  }
-  d.lat = gps.location.lat();
-  d.lon = gps.location.lng();
-  d.alt = gps.altitude.meters();
-  d.speed = gps.speed.kmph();    // <-- Grabs speed in km/h for the new screen
-  d.sats = gps.satellites.value();
+
+  // 1. GPS
+  while (GPS_Serial.available() > 0) gps.encode(GPS_Serial.read());
+  d.lat      = gps.location.lat();
+  d.lon      = gps.location.lng();
+  d.alt      = gps.altitude.meters();
+  d.speed    = gps.speed.kmph();
+  d.sats     = gps.satellites.value();
   d.gpsValid = gps.location.isValid();
 
-  // 2. Read Time & Date from software clock.
-  // softClockBase is UTC. Add LKT offset (UTC+5:30 = 19800s) for local display.
+  // 2. Software clock → local time (LKT = UTC+5:30)
   {
     static constexpr unsigned long LKT_OFFSET_SEC = 19800UL;
     unsigned long elapsed = (millis() - softClockSetAt) / 1000UL;
@@ -83,7 +78,6 @@ SensorData getSensorReadings() {
     uint8_t mn = (t / 60) % 60;
     uint8_t hh = (t / 3600) % 24;
 
-    // Convert days portion to Y/M/D
     uint32_t days = t / 86400UL;
     uint16_t year = 1970;
     while (true) {
@@ -109,7 +103,7 @@ SensorData getSensorReadings() {
     d.dateStr = String(dBuf);
   }
 
-  // 3. Read IMU (Accelerometer & Gyroscope)
+  // 3. IMU
   sensors_event_t a, g, t;
   mpu.getEvent(&a, &g, &t);
   d.ax = a.acceleration.x - off_ax;
@@ -120,22 +114,26 @@ SensorData getSensorReadings() {
   d.gz = g.gyro.z - off_gz;
   d.temp = t.temperature;
 
-  // 4. INTERNAL STORAGE STATUS (Injected from WebManager)
+  // 4. Internal storage status (injected from WebManager)
   if (internalMounted) {
-    d.sdStatus = true;
-    d.sdUsedMB = internalUsedMB;
-    d.sdTotalMB = internalTotalMB; 
+    d.sdStatus  = true;
+    d.sdUsedMB  = internalUsedMB;
+    d.sdTotalMB = internalTotalMB;
   } else {
-    d.sdStatus = false;
-    d.sdUsedMB = 0;
+    d.sdStatus  = false;
+    d.sdUsedMB  = 0;
     d.sdTotalMB = 0;
   }
 
-  // 5. WEB-INJECTED LOCATION (from webapp /push-location endpoint)
+  // 5. Web-injected location (from /push-location when GPS has no fix)
   d.webLat          = webInjectedLat;
   d.webLon          = webInjectedLon;
   d.webSpeed        = webInjectedSpeed;
   d.webLocationValid = webLocationInjected;
+
+  // 6. Blindspot distances (injected from /push-blindspot endpoint)
+  d.blindLeft  = webBlindLeft;
+  d.blindRight = webBlindRight;
 
   return d;
 }

@@ -1,5 +1,6 @@
 #include "Graphics.h"
 #include "SimManager.h"
+#include <WiFi.h> // Required to check WiFi status in the simplified UI
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, SCL_PIN, SDA_PIN);
 
@@ -53,7 +54,7 @@ void playStartupAnimation() {
 }
 
 // --- PAGE 0: CLOCK ---
-void drawClockPage(SensorData data) {
+void drawClockPage(const SensorData& data) {
   u8g2.clearBuffer();
   
   // Big Time
@@ -77,7 +78,7 @@ void drawClockPage(SensorData data) {
 }
 
 // --- PAGE 1: ACCELEROMETER ---
-void drawAccelPage(SensorData data) {
+void drawAccelPage(const SensorData& data) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.drawStr(2, 8, "ACCELEROMETER"); u8g2.drawLine(0, 10, 128, 10);
@@ -90,7 +91,7 @@ void drawAccelPage(SensorData data) {
 }
 
 // --- PAGE 2: GYROSCOPE ---
-void drawGyroPage(SensorData data) {
+void drawGyroPage(const SensorData& data) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.drawStr(2, 8, "GYROSCOPE"); u8g2.drawLine(0, 10, 128, 10);
@@ -103,7 +104,7 @@ void drawGyroPage(SensorData data) {
 }
 
 // --- PAGE 3: FLIGHT NAV / SPEEDOMETER ---
-void drawGPSPage(SensorData data) {
+void drawGPSPage(const SensorData& data) {
   u8g2.clearBuffer();
 
   // Resolve which location source to display
@@ -162,7 +163,7 @@ void drawGPSPage(SensorData data) {
 }
 
 // --- PAGE 4: SYSTEM HEALTH (storage + temperature) ---
-void drawSystemPage(SensorData data) {
+void drawSystemPage(const SensorData& data) {
   u8g2.clearBuffer();
 
   // ── Header ──────────────────────────────────────────────────────
@@ -279,7 +280,7 @@ void drawEyes(float x, float y, float lS, float rS, float lid) {
   }
 }
 
-void drawFace(SensorData data, bool isHappy) {
+void drawFace(const SensorData& data, bool isHappy) {
   unsigned long now = millis();
   if (isHappy) {
     setTargets(0, 0, 1.1, 1.1, 25);
@@ -308,6 +309,7 @@ void drawFace(SensorData data, bool isHappy) {
   }
   u8g2.sendBuffer();
 }
+
 // --- EMERGENCY SCREEN 1: IMPACT ---
 void drawCrashPage(float gForce) {
   u8g2.clearBuffer();
@@ -351,6 +353,43 @@ void drawDriveSafePage() {
   u8g2.drawStr(10, 30, "SOS CANCELED");
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(30, 50, "DRIVE SAFE");
+  u8g2.sendBuffer();
+}
+
+// --- EMERGENCY SCREEN: SENDING IN PROGRESS ---
+void drawSendingPage() {
+  u8g2.clearBuffer();
+
+  u8g2.drawRFrame(0, 0, 128, 64, 4); // Rounded outer frame
+  u8g2.drawLine(4, 12, 124, 12);     // Header underline
+  
+  u8g2.setFont(u8g2_font_5x7_tf);
+  int w1 = u8g2.getStrWidth("EMERGENCY OVERRIDE");
+  u8g2.setCursor((128 - w1) / 2, 9);
+  u8g2.print("EMERGENCY OVERRIDE");
+
+  u8g2.setFont(u8g2_font_6x10_tf);
+  int w2 = u8g2.getStrWidth("SENDING SOS...");
+  u8g2.setCursor((128 - w2) / 2, 32);
+  u8g2.print("SENDING SOS...");
+
+  // Blinking "Please Wait" footer
+  if ((millis() / 400) % 2 == 0) {
+    u8g2.setDrawColor(1);
+    u8g2.drawBox(10, 46, 108, 14);
+    u8g2.setDrawColor(0);
+    u8g2.setFont(u8g2_font_5x7_tf);
+    int w3 = u8g2.getStrWidth("PLEASE WAIT");
+    u8g2.setCursor((128 - w3) / 2, 56);
+    u8g2.print("PLEASE WAIT");
+    u8g2.setDrawColor(1); 
+  } else {
+    u8g2.setFont(u8g2_font_5x7_tf);
+    int w3 = u8g2.getStrWidth("PLEASE WAIT");
+    u8g2.setCursor((128 - w3) / 2, 56);
+    u8g2.print("PLEASE WAIT");
+  }
+
   u8g2.sendBuffer();
 }
 
@@ -406,6 +445,7 @@ void drawCallingPage() {
 
   u8g2.sendBuffer();
 }
+
 // =====================================================
 // CONNECTING ANIMATION — shown while SIM init blocks
 // Called from a FreeRTOS task in setup()
@@ -446,7 +486,7 @@ void drawConnectingAnimation() {
 }
 
 // =====================================================
-// PAGE 5: SIM STATUS — signal strength + operator
+// PAGE 5: SIM STATUS — Minimal Network Status
 // =====================================================
 void drawSimPage(SimStatus sim) {
   u8g2.clearBuffer();
@@ -456,58 +496,30 @@ void drawSimPage(SimStatus sim) {
   u8g2.drawBox(0, 0, 128, 13);
   u8g2.setDrawColor(0);
   u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(3, 10, "GSM  NETWORK");
+  u8g2.drawStr(3, 10, "NETWORK STATUS");
   u8g2.setDrawColor(1);
 
-  // ── Signal bars — large, centred, grow upward from y=50 ──
-  // 5 bars, widths 10px, gap 6px, total = 5*10 + 4*6 = 74px → start x=27
-  const int barBaseY = 50;
-  const int barW = 10, barGap = 6, barStartX = 27;
-  for (int b = 0; b < 5; b++) {
-    int h  = 7 + b * 7;                     // 7,14,21,28,35 px — steps of 7
-    int bx = barStartX + b * (barW + barGap);
-    int by = barBaseY - h;
-    if (b < sim.bars) {
-      u8g2.drawBox(bx, by, barW, h);        // filled = active
-    } else {
-      u8g2.drawFrame(bx, by, barW, h);      // outline = inactive
-    }
+  u8g2.setFont(u8g2_font_6x10_tf);
+
+  // ── WiFi Status ──────────────────────────────────────
+  u8g2.setCursor(10, 35);
+  if (WiFi.status() == WL_CONNECTED) {
+    u8g2.print("WIFI: CONNECTED");
+  } else {
+    u8g2.print("WIFI: OFFLINE");
   }
 
-  // ── dBm label right of bars ──────────────────────────
-  u8g2.setFont(u8g2_font_5x7_tf);
-  String dbmStr = (sim.dBm != 0) ? String(sim.dBm) + "dBm" : "---";
-  u8g2.setCursor(105, 42);
-  u8g2.print(dbmStr);
-
-  // ── Thin divider ─────────────────────────────────────
-  u8g2.drawLine(0, 55, 128, 55);
-
-  // ── Operator + status on bottom strip ────────────────
-  u8g2.setFont(u8g2_font_6x10_tf);
-  String left = sim.operatorName.length() > 0 ? sim.operatorName : "No network";
-  u8g2.setCursor(0, 63);
-  u8g2.print(left);
-
-  // Status badge — right-aligned
-  const char* badge = sim.registered ? "ONLINE" : "SEARCH";
-  int bw = u8g2.getStrWidth(badge);
+  // ── SIM Status ───────────────────────────────────────
+  u8g2.setCursor(10, 55);
   if (sim.registered) {
-    // Inverted badge for online
-    u8g2.drawBox(128 - bw - 4, 55, bw + 4, 10);
-    u8g2.setDrawColor(0);
-    u8g2.setCursor(128 - bw - 2, 63);
-    u8g2.print(badge);
-    u8g2.setDrawColor(1);
+    u8g2.print("SIM:  ONLINE");
   } else {
-    // Outlined badge for searching
-    u8g2.drawFrame(128 - bw - 4, 55, bw + 4, 10);
-    u8g2.setCursor(128 - bw - 2, 63);
-    u8g2.print(badge);
+    u8g2.print("SIM:  SEARCHING");
   }
 
   u8g2.sendBuffer();
 }
+
 // =====================================================
 // ROLLOVER ALERT SCREEN
 // Shows roll and pitch angles with a visual attitude
@@ -553,9 +565,18 @@ void drawRolloverPage(float roll, float pitch) {
   u8g2.setCursor(2, 38);
   u8g2.print(roll, 1); u8g2.print((char)0xB0); // degree symbol
 
-  u8g2.drawStr(2, 52, "PITCH:");
-  u8g2.setCursor(2, 64);
+  u8g2.drawStr(2, 48, "PITCH:");
+  u8g2.setCursor(2, 58);
   u8g2.print(pitch, 1); u8g2.print((char)0xB0);
+
+  // ── Flashing "TAP TO DISMISS" footer ──
+  if ((millis() / 500) % 2 == 0) {
+    u8g2.setFont(u8g2_font_5x7_tf);
+    u8g2.drawBox(0, 57, 128, 7);
+    u8g2.setDrawColor(0);
+    u8g2.drawStr(14, 63, "TAP TO DISMISS");
+    u8g2.setDrawColor(1);
+  }
 
   u8g2.sendBuffer();
 }
@@ -610,6 +631,94 @@ void drawTempAlertPage(float tempC) {
   // Threshold tick mark
   int tickX = (int)(((TEMP_ALERT_THRESHOLD_C - low) / (high - low)) * 124.0f) + 2;
   u8g2.drawLine(tickX, 50, tickX, 63);
+
+  u8g2.sendBuffer();
+}
+// =====================================================
+// BLINDSPOT WARNING SCREEN
+//
+// Layout (128×64):
+//   Top bar  — inverted "BLINDSPOT" header
+//   Left half  — shows LEFT side status (distance or CLEAR)
+//   Right half — shows RIGHT side status (distance or CLEAR)
+//   Centre     — simple top-view car icon
+//   Bottom     — animated hazard arrow(s) on the active side(s)
+// =====================================================
+void drawBlindspotPage(bool bsLeft, bool bsRight,
+                       int distLeft, int distRight) {
+  u8g2.clearBuffer();
+
+  // ── Flashing inverted header ──────────────────────────────────────
+  bool blink = ((millis() / 300) % 2 == 0);
+  u8g2.setDrawColor(1);
+  if (blink) u8g2.drawBox(0, 0, 128, 13);
+  else       u8g2.drawFrame(0, 0, 128, 13);
+  u8g2.setDrawColor(blink ? 0 : 1);
+  u8g2.setFont(u8g2_font_5x7_tf);
+  int hw = u8g2.getStrWidth("!! BLINDSPOT !!");
+  u8g2.setCursor((128 - hw) / 2, 10);
+  u8g2.print("!! BLINDSPOT !!");
+  u8g2.setDrawColor(1);
+
+  // ── Simple top-view car icon (centred) ───────────────────────────
+  // Body
+  u8g2.drawRFrame(50, 18, 28, 36, 3);
+  // Windscreen lines
+  u8g2.drawLine(54, 22, 74, 22);
+  u8g2.drawLine(54, 48, 74, 48);
+  // Wheels (four small filled boxes)
+  u8g2.drawBox(47, 20, 4, 7);   // front-left
+  u8g2.drawBox(77, 20, 4, 7);   // front-right
+  u8g2.drawBox(47, 45, 4, 7);   // rear-left
+  u8g2.drawBox(77, 45, 4, 7);   // rear-right
+
+  // ── LEFT side ────────────────────────────────────────────────────
+  u8g2.setFont(u8g2_font_5x7_tf);
+  if (bsLeft) {
+    // Animated filled warning arrow pointing RIGHT (toward the car)
+    int arrowX = 2 + ((millis() / 200) % 3) * 3;  // pulses right
+    // Arrow body
+    u8g2.drawBox(arrowX,      32, 10, 5);
+    // Arrow head
+    u8g2.drawTriangle(arrowX+10, 28,
+                      arrowX+10, 41,
+                      arrowX+18, 36);
+    // Distance label
+    if (distLeft >= 0) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%dcm", distLeft);
+      u8g2.setCursor(2, 60);
+      u8g2.print(buf);
+    }
+  } else {
+    // Clear indicator
+    u8g2.setCursor(4, 38);
+    u8g2.print("CLEAR");
+  }
+
+  // ── RIGHT side ───────────────────────────────────────────────────
+  if (bsRight) {
+    // Animated filled warning arrow pointing LEFT (toward the car)
+    int arrowX = 126 - 18 - ((millis() / 200) % 3) * 3;  // pulses left
+    // Arrow head
+    u8g2.drawTriangle(arrowX,      28,
+                      arrowX,      41,
+                      arrowX - 8,  36);
+    // Arrow body
+    u8g2.drawBox(arrowX, 32, 10, 5);
+    // Distance label (right-aligned)
+    if (distRight >= 0) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%dcm", distRight);
+      int dw = u8g2.getStrWidth(buf);
+      u8g2.setCursor(126 - dw, 60);
+      u8g2.print(buf);
+    }
+  } else {
+    int cw = u8g2.getStrWidth("CLEAR");
+    u8g2.setCursor(124 - cw, 38);
+    u8g2.print("CLEAR");
+  }
 
   u8g2.sendBuffer();
 }

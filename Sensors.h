@@ -20,6 +20,11 @@ extern double webInjectedLon;
 extern float  webInjectedSpeed;
 extern bool   webLocationInjected;
 
+// Web-injected blindspot distances — written by WebManager (/push-blindspot endpoint).
+// Values are in cm.  -1 means no sensor / no reading yet.
+extern int webBlindLeft;
+extern int webBlindRight;
+
 struct SensorData {
   // IMU (Accelerometer & Gyroscope)
   float ax, ay, az;
@@ -29,16 +34,16 @@ struct SensorData {
   // GPS Data
   double lat, lon;
   double alt;
-  float speed;      // <-- Added for the Speedometer
-  int sats;
-  bool gpsValid;
+  float  speed;
+  int    sats;
+  bool   gpsValid;
 
   // Time & Date
   String dateStr;
   String timeStr;
 
-// SD Status
-  bool sdStatus;
+  // Storage Status
+  bool  sdStatus;
   float sdUsedMB;
   float sdTotalMB;
 
@@ -47,10 +52,14 @@ struct SensorData {
   double webLon;
   float  webSpeed;
   bool   webLocationValid;
+
+  // Blindspot sensor distances in cm (-1 = no reading)
+  int blindLeft;
+  int blindRight;
 };
 
 void initSensors();
-void calibrateSensors(); 
+void calibrateSensors();
 SensorData getSensorReadings();
 
 #endif

@@ -32,54 +32,33 @@
 // ==========================================
 // ROLLOVER DETECTION
 // ==========================================
-// Angle (degrees) beyond which a roll or pitch is considered a rollover.
-// 60° is conservative — adjust down to 45° for more sensitivity.
 #define ROLLOVER_ANGLE_DEG      60.0f
-
-// How long (ms) the angle must be sustained before triggering.
-// Filters out brief hard cornering or speed bumps.
 #define ROLLOVER_SUSTAIN_MS     1500
 
 // ==========================================
 // TEMPERATURE MONITORING
 // ==========================================
-// MPU6050 die temperature alert threshold (°C).
-// The die runs ~2-3°C above ambient; 70°C die = ~67°C ambient.
-// Raise to 80 if mounted close to the engine bay.
 #define TEMP_ALERT_THRESHOLD_C  70.0f
-
-// How long (ms) the temperature must stay above threshold before alerting.
-// Prevents a single noisy sample from triggering a false alarm.
 #define TEMP_ALERT_SUSTAIN_MS   5000
-
-// How long (ms) to wait before re-alerting if temp stays high.
 #define TEMP_ALERT_COOLDOWN_MS  60000
 
 // ==========================================
-// NETWORK & CLOUD SETTINGS
+// NETWORK & CLOUD SETTINGS (HARDCODED)
 // ==========================================
 
-// --- 1. ESP32 OFFLINE HOTSPOT (For Local Downloads) ---
-// This is the network the ESP32 broadcasts if you want to connect a laptop to it.
-#define WIFI_SSID "BlackBox_S3"
-#define WIFI_PASS "12345678"
+// --- 1. INTERNET CONNECTION ---
+#define ROUTER_SSID "Pixel7pro"
+#define ROUTER_PASS "krb@2903"
 
-// --- 2. INTERNET CONNECTION ---
-// These are compile-time fallback defaults only.
-// Actual credentials are stored in NVS flash via SettingsManager and
-// configured through the web UI at http://192.168.4.1/settings.
-// Never commit real passwords here — use the web UI instead.
-#define ROUTER_SSID ""
-#define ROUTER_PASS ""
+// --- 2. FIREBASE CREDENTIALS ---
+#define FIREBASE_URL "https://axel-7e7e5-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_API_KEY "AIzaSyBvvH1ahhPmBqE2af32Ln0uIfOvzMfyQ4Y"
 
-// --- 3. FIREBASE CREDENTIALS ---
-// Leave blank — configure via the web settings page.
-// Stored securely in NVS flash, never in source code.
-#define FIREBASE_URL ""
-#define FIREBASE_API_KEY ""
+// --- 3. DEVICE & USER IDENTITY ---
+#define USER_ID "E25zB1dcAmc9Mknc9d0QPjicgVm2"
 
-// --- 4. DEVICE & USER IDENTITY ---
-// Leave blank — configure via the web settings page.
-#define USER_ID ""
+// --- 4. CELLULAR DATA & SMS ---
+#define PHONE_NUMBER "+94727238727" // Emergency contact
+#define SIM_APN "dialogbb"          // Mobile operator APN (e.g. dialogbb, mobitelbb)
 
 #endif

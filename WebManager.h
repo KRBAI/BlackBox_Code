@@ -2,41 +2,44 @@
 #define WEBMANAGER_H
 
 #include <Arduino.h>
-#include <FFat.h>     
-#include <WiFi.h>          
-#include <WebServer.h>     
-#include <WiFiClientSecure.h> 
+#include <FFat.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WiFiClientSecure.h>
 
-// --- MAGIC SWITCH: Must be defined BEFORE the Firebase include! ---
 #define ENABLE_DATABASE
+#include <FirebaseClient.h>
 
-#include <FirebaseClient.h>   
 #include "Config.h"
 #include "Sensors.h"
-#include "SimManager.h"    // gprsConnected(), httpPostGPRS()
+#include "SimManager.h"
 
+// Internal storage stats (read by Sensors.cpp)
 extern float internalUsedMB;
 extern float internalTotalMB;
-extern bool internalMounted;
+extern bool  internalMounted;
 
-// Web-injected location — written by /push-location POST from the webapp.
-// Exposed here so Sensors.cpp can read them via the extern in Sensors.h.
+// Web-injected location (from /push-location POST, used when GPS has no fix)
 extern double webInjectedLat;
 extern double webInjectedLon;
 extern float  webInjectedSpeed;
 extern bool   webLocationInjected;
 
-extern String dataBuffer;
-extern int bufferCount;
+// Web-injected blindspot distances in cm.
+// Written by /push-blindspot POST from the companion app.
+// -1 = no sensor / no reading available.
+extern int webBlindLeft;
+extern int webBlindRight;
 
 void initWebManager();
-void handleWebManager(); 
-void logDataToInternal(SensorData d); 
-void forceSaveData(); 
+void handleWebManager();
+void logDataToInternal(const SensorData& d);
+void forceSaveData();
 
 void initWebServer();
 void handleWebServer();
-void uploadToFirebase(SensorData d); 
-void pollTelemetryLocation();   // runs on Core 0 via telemetryPollTask — do NOT call from loop()
+void uploadToFirebase(const SensorData& d);
+void pollTelemetryLocation();
+void pollBlindspotData();   // reads /telemetry from Firebase (written by ESP32-C3)
 
 #endif
